@@ -1,0 +1,607 @@
+import os, sys
+from collections import Counter, UserDict
+import json, csv, pickle
+import random
+import re
+from datetime import datetime
+from string import punctuation
+import spacy
+from spacy_syllables import SpacySyllables
+import numpy as np
+from pandas import DataFrame
+from sklearn.cluster import OPTICS
+import seaborn as sns
+from tqdm import tqdm
+from pkg.preproc import utils
+
+
+sys.setrecursionlimit(60000)
+
+base_tmp = os.path.join(os.path.absdir(__file__), 'tmp')
+base_data = os.path.join(base_tmp, 'data')
+base_3rdparty = os.path.join(base_data, '3rdparty')
+base_models = os.path.join(base, 'models')
+
+
+class Data(object):        
+    
+    @staticmethod
+    def _load_kaggle__():
+        f = os.path.join(base_3rdparty, 'kaggle_original.csv')
+        fields = ['id', 'link', 'content', 'date', 
+                  'retweets', 'favorites', 'mentions', 'hashtags']
+        kagglereadr = csv.DictReader(open(f, encoding='utf-8', mode='r'), 
+                                     fieldnames=fields)
+        next(kagglereadr)
+        kaggle_rows = [r for r in kagglereadr]
+        return kaggle_rows
+
+    @staticmethod
+    def _load_clarkgrieves__():
+        
+        rm_fields = ["TWEETID", "MENTION", "HASHTAG", 
+                     "URL", 'JOB', 'SOURCE', 'RETWEET', 'FAV']
+        cgdate_idx = " ".join([cg.pop('DATE'), cg.pop('TIME')])
+        f = os.path.join(base_3rdparty, 'clarkgrieves_data.txt')
+        cg_readr = csv.reader(open(f, encoding='utf-8', mode='r'))
+        cg_header = next(cg_readr)
+        cg_rows = [{cg_header[h]: row[h]
+                    for h in range(len(cg_header))} 
+                   for row in cg_readr if cg_header[h] not in rm_fields]
+        _rows = []
+        for cgx in cg_rows:
+            cgx.update({"idx": " ".join([cgx.pop("DATE"), cgx.pop("TIME")]),
+                        "word_count": cg.pop("WORDCOUNT", 0), 
+                        'text_feats': {k.lower(): 
+                                       (0 if cgx.pop(k) == 'A' else 1) 
+                                       for k in cgx}})
+            _rows.append(cgx)
+            
+        return _rows
+    
+    @staticmethod
+    def _load_twitarchive__():
+        f = os.path.join(base_3rdparty, 
+                         'realdonaldtrump-wort_twitter_archive.json')
+        tta = json.load(open(f, encoding='utf-8', mode='r'))
+        
+        def format_data(twitter_archive):
+            jss = {}
+
+            retweets = 0
+            for j in twitter_archive:
+                if is_retweet(j):
+                    retweets += 1
+                    pass
+                else:
+                    if is_quote(j['text']):
+                        pass
+                    else:
+                        clean = cleaner(j['text'])
+
+                        if clean is not None:
+                            created_date = datetime.strptime(
+                                j.pop('created_at'), "%a %b %d %H:%M:%S %z %Y")
+                            created_date = created_date.strftime(
+                                "%Y-%m-%d %H:%M:%S")
+                            plat_name, plat_id = strip_source(j.pop('source'))
+                            j.update({"platform_name": plat_name, 
+                                      'platform_id': plat_id,
+                                      'utc_date': created_date, 
+                                      "contains_url": 
+                                      (1 if j['text'].find("http")>-1 else 0),
+                                      "text": clean})
+                            _id = j.pop("id_str")
+                            jss.update({_id: j})
+            print(f'eliminated {retweets} retweets')    
+            return jss
+        return format_data(tta)
+    
+    @staticmethod
+    def _merge_kaggle_twitterarchive__(kaggle_data, twitter_archive):
+        new_rows = []
+        quotes = 0
+        for rowidx in tqdm(range(len(kaggle_data))):
+            row = dict(kaggle_data[rowidx])
+            try: 
+                jdata = twitter_archive.pop(row['id'])
+            except KeyError as err:
+                pass
+            else:
+
+                row.update(**jdata)
+                if is_quote(row.pop('content')):
+                    pass
+
+                else:
+                    text, mentions, hashtags = clean_mentions_hashtags(row['text'])
+                    fav_count = int(row.pop('favorites', 0))
+                    retweets_count = int(row.pop("retweets",0))
+                    dt =  datetime.strptime(row.pop('date'), 
+                                            "%Y-%m-%d %H:%M:%S")
+                    row.update({"mentions": [mxx for mxx in mentions 
+                                             if len(mxx) > 0], 
+                                "mentions_count": len(mentions), 
+                                "hashtags": [hxx for hxx in hashtags 
+                                             if len(hxx) > 0], 
+                                "hashtags_count": len(hashtags), 
+                                "favorites_count": fav_count, 
+                                "retweets_count": retweets_count, 
+                                'text': text, 
+                                "local_date": dt.strftime("%Y-%m-%d"), 
+                                'local_time': dt.strftime("%H:%M:%S")})
+                    new_rows.append(row)
+
+        print(f"{quotes} quotes eliminated")
+        return new_rows
+
+    @staticmethod
+    def _merge_cg_other__(dat, cg_data):
+        dd = []
+        ix = 0
+        for cgix in tqdm(range(len(cg_data))):
+
+            cg = cg_data[cgix]
+            for d in dat:
+                if cg.pop('idx') == d['utc_date']:
+                    if ix > 0:
+                        pass
+                    else:
+                        ix += 1
+                    dd.append(d)
+        return dd
+    
+    def get_sample(load_local=True, *args, **kwargs):
+        f = os.path.join(base_data, "realdonaldtrump.sample.final")
+        if os.path.isfile(f) and load_local:
+            data = json.load(f)
+        else:
+            n = kwargs.get("n", 5000)
+            full_data = Data.get()
+            data = random.choices(full_data, k=n)
+            json.dump(data, open(f, mode='w'))
+        return data
+    
+    @classmethod
+    def get(load_local=True):
+
+        f = os.path.join(base_data, "realdonaldtrump.full.final")
+        
+        if os.path.isfile(f) and load_local:
+            data = json.load(f)
+        else:
+            
+            kg = Data._load_kaggle__()
+            cg = Data._load_clarkgrieves__()
+            ta = Data._load_twitarchive__()
+        
+            kta = Data._merge_kaggle_twitterarchive__(kg, ta)
+            data = Data._merge_cg_other__(kta, cg)
+        
+            json.dump(data, open(f, mode='w'))
+        return data
+    
+    
+class Document(object):
+    
+    def __init__(self, **raw_data):
+        super().__init__()
+        # see readme for field descriptions
+        self._data = None
+        self._raw_data = raw_data
+        
+        fields = ["n_hashtags", "n_mentions", "avg_syllables",
+                  "avg_word_length", "fk", 'n_sents', 
+                  "n_ents", "n_uppers", "platform_id",'amplifier',
+                  'analneg', 'attribadj', 'auxdo', 'bemv',
+                  'bracket', 'caps', 'cconj', 'cntrstconj',
+                  'colon', 'comma', 'defart', 'detquan',
+                  'exclam', 'fstpp', 'fulstop', 'gerund',
+                  'havemv', 'imperative', 'indefart', 
+                  'infinitive', 'it', 'mdnec', 
+                  'mdposs', 'mdpred', 'multiwvb',
+                  'nomin', 'numdet', 'numnoun', 'objpro',
+                  'otheradv', 'othrintj', 'othrnoun',
+                  'othrverb', 'passive', 'past', 'perceptvb',
+                  'perfect', 'posesprpn', 'possdet', 'predadj', 
+                  'prep', 'procontract', 'progressive', 
+                  'proquan', 'provdo', 'prpn', 'prvv', 'pubv', 
+                  'ques', 'relclausesubgap', 'sinflect', 
+                  'sndpp', 'stancevb', 'subjpro', 'superlative', 
+                  'thrdpp', 'timeadv', 'whw', 'initialmention']
+        
+        self._mentions, self._hashtags = [], []
+        self._n_words, self._n_sents = 0, 0
+        self._n_syllables = 0
+        
+        self._platform_map = {}
+    
+    @property
+    def data(self):
+        return self._data
+    
+    @property
+    def raw_data(self):
+        return self._raw_data
+    
+    @property
+    def n_syllables(self):
+        return self._n_syllables
+    
+    @property
+    def mentions(self):
+        return self._mentions
+    
+    @property
+    def hashtags(self):
+        return self._hashtags
+    
+    @property
+    def flesch_kincaid(self):
+        fa = (self.n_words/self.n_sents)
+        fb = (self.n_syllables/self.n_words)
+        calc = 206.835 - (1.015*fa) - (84.6*fb)
+        return calc
+    
+    @staticmethod
+    def source_text2id(platform):
+        try:
+            platform_id = self._platform_map[platform]
+        except KeyError as errmsg:
+            platform_id = len(self._platform_map) + 1
+            self._platform_map.update({platform: len(self._platform_map)+1})
+        return platform_id
+        
+    def token_features(self):
+        assert self.data is not None, 'must run tokenizer before features can be extracted'
+        syllables_tot, word_len_tot = 0, 0 
+        doc_len = 0
+        tkns_low, tags = [], []
+        for t in self.data:
+            # drops mentions and hashtags
+            if t.text not in mentions or t.text not in hashtags:
+                syllables_tot += (0 if t._.syllables_count is None 
+                                  else t._.syllables_count)
+                doc_len += 1
+                tx = t.lower_.strip()
+                if t.lower_ in _stops or t.lower_ in _puncts:
+                    # remove extraneous punctuations and stop words
+                    pass
+                else:
+                    # remove punctuations from individual tokens
+                    tx = clean_pass2(tx)
+                    if len(tx) != 0:
+                        word_len_tot += len(tx)
+                        tkns_low.append(tx)
+                        tags.append(t.tag_)
+
+
+        if len(tkns_low) == 0 or doc_len == 0:
+            return None, None, None, None, None
+        else:
+            return syllables_tot, word_len_tot, doc_len, tkns_low, tags
+    
+    
+    
+    @property
+    def n_uppercase(self):
+        return self._n_uppers
+    
+    @n_uppercase.setter
+    def n_uppercase(doc):
+        n_uppers = 0
+        for tkn in doc:
+            txt = tkn.text
+            if tkn.text.isupper():
+                n_uppers += 1
+
+        return n_uppers
+    
+    def tokenize(self, nlp_1, nlp_2):
+        doc_sents_raw, docs = [], []
+        for didx in tqdm(range(len(data))):
+            d = data[didx]['text']
+            clean_str = clean(d)
+
+            if clean_str is not None and clean_str.strip() != "":
+                try:
+                    self.doc = nlp_1(clean_str)
+                    doc_1 = nlp_2(clean_str)
+
+                except Exception as err:
+                    print(err, clean_str)
+                    pass
+                else:
+                    sents = [[x.text for x in s 
+                              if x.text not in _puncts] 
+                             for s in doc_0.sents]
+                    tkns_merged = []
+                    for t in doc_1:
+                        tt = clean_pass2(t.text)
+                        if len(tt) == 0 or tt.lower() in _stops:
+                            pass
+                        else:
+                            tkns_merged.append(tt)
+
+
+                    # in case you need it 
+                    n_uppers= upper_words(doc_0)
+                    n_sents = len(sents)
+                    n_ents = len(doc_1.ents)
+                    platid = Document.source_text2id(data[didx]['platform_name'])
+                    
+
+                    syllables_total, word_length_total, doc_length, tkns_lc, tags = token_features(doc_0, data[didx]['mentions'], data[didx]['hashtags'])
+                    n_words = (len(tkns_lc) if data[didx]['word_count'] == 0 
+                               else float(data[didx]['word_count']))
+                    if doc_length is None:
+                        pass
+                    else:
+
+                        fk = flesch_kincaid(n_words=doc_length,
+                                            n_syllables=syllables_total,
+                                            n_sents=n_sents, out='score')
+                        avg_syllables = syllables_total/n_words
+                        avg_word_length = word_length_total/n_words
+
+                        text_feats = [int(x) for x in 
+                                      data[didx]['text_feats'].values()]
+
+                        doc_arr = [data[didx]['hashtags_count'], 
+                                   data[didx]['mentions_count'],
+                                   avg_syllables, avg_word_length, 
+                                   fk, n_sents, n_ents, n_uppers,
+                                   platform_id, *text_feats]
+
+                        if len(doc_arr) == 69:
+                            docs.append({"ID": didx, "lang_arr": doc_arr, 
+                                         'tags': tags, 'tokens_lower': tkns_lc,
+                                         'tokens_merged': tkns_merged,
+                                         **data[didx]})
+                        else:
+                            print("Length Error: ")
+                            print(f"{didx}) {data[didx]['text']}")
+
+        return docs
+
+        
+class Preprocessor(object):
+    
+    def __init__(self)
+
+        self._stops = [s.strip() for s in
+                       open(os.path.join(base_data, 'stopwords.en.basic'),
+                                         mode='r').readlines()]
+        
+
+        self._puncts = list(punctuation)
+        excl=['@', "#"]
+        for e in excl:
+            self._puncts.remove(e)
+        self._puncts.extend(['”', '’', '“'])
+        self._nlp = spacy.load("en_core_web_sm")
+        sentencizer = spacy.pipeline.Sentencizer(punct_chars=[".", "?", "!", 
+                                                              "。", ":", "..."])
+        self._nlp.add_pipe(sentencizer, 
+                                name="sentencizer", before='tagger')
+        
+        syllables = SpacySyllables(self._base_nlp)
+        self._nlp.add_pipe(syllables, name='syllables')
+        
+        self.docs = []
+
+    def update_nlp(self):
+        merge_ents = self._nlp.create_pipe("merge_entities")
+        self._nlp.add_pipe(merge_ents)
+
+        return self._nlp
+
+    @staticmethod
+    def clean(string):
+        string = re.sub(r'(&amp;|&)', "and", string)
+        string = re.sub(r'\d(\W|)(am|a.m.|A.M.|pm|p.m.|P.M.)', "", string)
+        string = re.sub(r'(CST|PST|EST|PT|CT|ET|CDT|EDT|PDT)', "", string)
+        string = re.sub(" \/ ", "", string)
+        
+        string = string.replace("’ve", " have").replace("’s", "")
+        string = string.replace("’ll", ' will').replace("n’t", " not")
+        string = string.replace("‘18", '2018').replace("w\/", "with")
+        string = string.replace("'s", "").replace("'ve", " have")
+        string = string.replace("'ll", ' will')
+        string = string.replace("n't", " not").replace("--","").replace("—","")
+        if string is not None:
+            if len(string) > 0:
+                return string
+        else:
+            pass
+        
+    @staticmethod
+    def clean2(token):
+        token = re.sub("\.(?=.*\.)", "", token)
+        token = token.replace("’ve", " have").replace("’s", "")
+        token = token.replace("’ll", ' will').replace("n’t", " not")
+        token = token.replace("‘18", '2018').replace("w\/", "with")
+        token = token.replace("'s", "").replace("'ve", " have")
+        token = token.replace("'ll", ' will')
+        token = token.replace("n't", " not").replace("--","").replace("—","")
+        token = token.strip()
+        if len(token) > 0 and token not in _puncts:
+            return token
+        else:
+            return ""
+    
+    def flesch_kincaid(n_words, n_sents, n_syllables, out):
+        fa = (n_words/n_sents)
+        fb = (n_syllables/n_words)
+        calc = 206.835 - (1.015*fa) - (84.6*fb)
+        if out == 'score':
+            return calc
+
+        elif out == 'level':
+            conv = [(100.0, "Less than 5th"), 
+                    (90.0, "5th Grade"), (80.0, "6th Grade"), 
+                    (70.0, "7th Grade"), (60.0, "8th/9th Grade"),
+                    (50.0, "10th - 12th Grade"), (30.0, "Some College"), 
+                    (10.0, "College Grad"), (0.0, "Professional")]
+            grade = None
+            while not grade:
+                gtest = conv.pop(0)
+                if calc < gtest[0]:
+                    pass
+                else:
+                    grade = gtest[1]
+            return grade
+
+
+
+    def token_features(doc, mentions, hashtags):
+        syllables_tot, word_len_tot = 0, 0 
+        doc_len = 0
+        tkns_low, tags = [], []
+        for t in doc:
+            # drops mentions and hashtags
+            if t.text not in mentions or t.text not in hashtags:
+                syllables_tot += (0 if t._.syllables_count is None 
+                                  else t._.syllables_count)
+                doc_len += 1
+                tx = t.lower_.strip()
+                if t.lower_ in _stops or t.lower_ in _puncts:
+                    # remove extraneous punctuations and stop words
+                    pass
+                else:
+                    # remove punctuations from individual tokens
+                    tx = clean_pass2(tx)
+                    if len(tx) != 0:
+                        word_len_tot += len(tx)
+                        tkns_low.append(tx)
+                        tags.append(t.tag_)
+
+
+        if len(tkns_low) == 0 or doc_len == 0:
+            return None, None, None, None, None
+        else:
+            return syllables_tot, word_len_tot, doc_len, tkns_low, tags
+
+    def process_docs(self, data)
+    
+def tokenize(data):
+    nlp_0 = build_nlp()
+    nlp_1 = build_nlp(join_ents=True)
+    doc_sents_raw, docs = [], []
+    platform_cats = {}
+    for didx in tqdm(range(len(data))):
+        d = data[didx]['text']
+        clean_str = clean(d)
+        
+        if clean_str is not None and clean_str.strip() != "":
+            try:
+                doc_0 = nlp_0(clean_str)
+                doc_1 = nlp_1(clean_str)
+                
+            except Exception as err:
+                print(err, clean_str)
+                pass
+            else:
+                sents = [[x.text for x in s 
+                          if x.text not in _puncts] 
+                         for s in doc_0.sents]
+                tkns_merged = []
+                for t in doc_1:
+                    tt = clean_pass2(t.text)
+                    if len(tt) == 0 or tt.lower() in _stops:
+                        pass
+                    else:
+                        tkns_merged.append(tt)
+                
+
+                # in case you need it 
+                n_uppers= upper_words(doc_0)
+                n_sents = len(sents)
+                n_ents = len(doc_1.ents)
+                platform_text = data[didx]['platform_name']
+                if platform_text in platform_cats:
+                    platform_id = platform_cats[platform_text]
+                else:
+                    platform_id = len(platform_cats) + 1
+                    platform_cats.update({platform_text: len(platform_cats)+1})
+
+                syllables_total, word_length_total, doc_length, tkns_lc, tags = token_features(doc_0, data[didx]['mentions'], data[didx]['hashtags'])
+                n_words = (len(tkns_lc) if data[didx]['word_count'] == 0 
+                           else float(data[didx]['word_count']))
+                if doc_length is None:
+                    pass
+                else:
+                    
+                    fk = flesch_kincaid(n_words=doc_length,
+                                        n_syllables=syllables_total,
+                                        n_sents=n_sents, out='score')
+                    avg_syllables = syllables_total/n_words
+                    avg_word_length = word_length_total/n_words
+                    
+                    text_feats = [int(x) for x in 
+                                  data[didx]['text_feats'].values()]
+                    
+                    doc_arr = [data[didx]['hashtags_count'], 
+                               data[didx]['mentions_count'],
+                               avg_syllables, avg_word_length, 
+                               fk, n_sents, n_ents, n_uppers,
+                               platform_id, *text_feats]
+                    
+                    if len(doc_arr) == 69:
+                        docs.append({"ID": didx, "lang_arr": doc_arr, 
+                                     'tags': tags, 'tokens_lower': tkns_lc,
+                                     'tokens_merged': tkns_merged,
+                                     **data[didx]})
+                    else:
+                        print("Length Error: ")
+                        print(f"{didx}) {data[didx]['text']}")
+            
+    return docs
+
+
+               
+def load_data(data=None, load_local=False):
+    arrs_file = os.path.join(base_data, "arrs.json")
+    tkns_file = os.path.join(base_data, "tkns.json")
+    cnts_file = os.path.join(base_data, "cnts.json")
+    docs_file = os.path.join(base_data, "docs.json")
+    if data is None:
+        dfile = "../data/tweets/realdonaldtrump.full.final"
+        fstream = open(dfile, mode='r')
+        js = json.load(fstream)
+    else:
+        js = data
+            
+    
+    if load_local is True:
+        arrs = json.load(open(arrs_file, mode='r'))
+        tkns = json.load(open(tkns_file, mode='r'))
+        cnts = json.load(open(cnts_file, mode='r'))
+        docs = json.load(open(docs_file, mode='r'))
+        print("data loaded.")
+
+    else:   
+        
+        docs = tokenize(js)
+        print(len(docs))
+        tkns, arrs, flat = [], [], []
+        for doc in docs:
+            tkns.append(doc['tokens_merged'])
+            flat.extend(doc['tokens_merged'])
+            arrs.append(doc['lang_arr'])
+        cnt = Counter(flat)
+        counts = {}
+        for c in cnt:
+            if type(c) == tuple:
+                counts.update({c[1]: cnt[c]})
+            else:
+                counts.update({c: cnt[c]})
+        
+        json.dump(arrs, open(arrs_file, mode='w'))
+        json.dump(tkns, open(tkns_file, mode='w'))
+        json.dump(counts, open(cnts_file, mode='w'))
+        json.dump(docs, open(docs_file, mode='w'))
+        print("data saved.")
+    return arrs, docs
+        
+    
