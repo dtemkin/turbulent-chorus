@@ -374,6 +374,8 @@ class Document(object):
         self._platform_txt = None
         self._n_uppers = 0
         self._cg_features, self._feature_array = [], []
+        self._local_date, self._local_time = None, None
+        self._utc_date = None
         self._id = None
         
     @property
@@ -601,10 +603,6 @@ class Document(object):
     def utc_date(self, x):
         self._utc_date = x
         
-    
-    def __dict__(self):
-        return {}
-        
 
 class Preprocessor(object):
     
@@ -722,9 +720,11 @@ class Preprocessor(object):
 
                         if len(doc_arr) == 69:
                             doc.feature_array = doc_arr
-                            self._arrs.append(doc.feature_array)
-                            self._docs.append({"ID": didx, 
-                                               **data[didx]})
+                            doc.local_date = data[didx]['local_date']
+                            doc.local_time = data[didx]['local_time']
+                            doc.utc_date = data[didx]['utc_date']
+                            doc.ID = didx
+                            self._docs.append(doc)
                             
                         else:
                             print("Length Error: ")
