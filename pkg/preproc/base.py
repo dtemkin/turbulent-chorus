@@ -1,17 +1,13 @@
 import os, sys
-from collections import Counter, UserDict, UserList
-import json, csv, pickle
+import json, csv
 import random
 import re
 from datetime import datetime
 from string import punctuation
 import spacy
 from spacy_syllables import SpacySyllables
-import numpy as np
-from pandas import DataFrame
-from sklearn.cluster import OPTICS
-import seaborn as sns
 from tqdm import tqdm
+import requests
 from pkg.preproc import utils
 
 
@@ -108,8 +104,8 @@ class Data(object):
         if hashtags is not None:
             s = re.sub("#\s*", "#", s)
 
-        mentions_list = [m.strip() for m in get_mentions(s)]
-        hashtags_list = [h.strip() for h in get_hashtags(s)]
+        mentions_list = [m.strip() for m in Data.get_mentions(s)]
+        hashtags_list = [h.strip() for h in Data.get_hashtags(s)]
         s = re.sub("@\w+\s*", " ", s)
         s = re.sub("#\w+\s*", " ", s)
         return s.strip(), mentions_list, hashtags_list
@@ -192,28 +188,26 @@ class Data(object):
         
         rm_fields = ["TWEETID", "MENTION", "HASHTAG", 
                      "URL", 'JOB', 'SOURCE', 'RETWEET', 'FAV']
-        cgdate_idx = " ".join([cg.pop('DATE'), cg.pop('TIME')])
         f = os.path.join(base_3rdparty, 'clarkgrieves_data.txt')
         cg_readr = csv.reader(open(f, encoding='utf-8', mode='r'))
         cg_header = next(cg_readr)
         cg_rows = [{cg_header[h]: row[h]
-                    for h in range(len(cg_header))} 
-                   for row in cg_readr if cg_header[h] not in rm_fields]
+                    for h in range(len(cg_header)) if cg_header[h]
+                   not in rm_fields}
+                   for row in cg_readr]
         _rows = []
         for cgx in cg_rows:
             cgx.update({"idx": " ".join([cgx.pop("DATE"), cgx.pop("TIME")]),
-                        "word_count": cg.pop("WORDCOUNT", 0), 
+                        "word_count": cgx.pop("WORDCOUNT", 0),
                         'text_feats': {k.lower(): 
                                        (0 if cgx.pop(k) == 'A' else 1) 
                                        for k in cgx}})
             _rows.append(cgx)
-            
         return _rows
     
     @staticmethod
     def _load_twitarchive__():
-        f = os.path.join(base_3rdparty, 
-                         'realdonaldtrump-wort_twitter_archive.json')
+        f = os.path.join(base_3rdparty, 'realdonaldtrump-wort_twitter_archive.json')
         tta = json.load(open(f, encoding='utf-8', mode='r'))
         
         def format_data(twitter_archive):
@@ -261,9 +255,8 @@ class Data(object):
             else:
 
                 row.update(**jdata)
-                if is_quote(row.pop('content')):
+                if Data.is_quote(row.pop('content')):
                     pass
-
                 else:
                     text, mentions, hashtags = Data.clean_mentions_hashtags(
                         row['text'])
@@ -296,14 +289,14 @@ class Data(object):
             cg = cg_data[cgix]
             for d in dat:
                 if cg.pop('idx') == d['utc_date']:
-                    if ix > 0:
+                    ix += 1
+                    if ix > 1:
                         pass
                     else:
-                        ix += 1
-                    dd.append(d)
+                        dd.append(d)
         return dd
     
-    def get_sample(self, load_local=True):
+    def get_sample(self, load_local=True, **kwargs):
         f = os.path.join(base_data, "realdonaldtrump.sample.final")
         if os.path.isfile(f) and load_local:
             data = json.load(f)
@@ -340,26 +333,26 @@ class Document(object):
         # see readme for field descriptions
         self._doc = doc
 
-        fields = ["n_hashtags", "n_mentions", "avg_syllables",
-                  "avg_word_length", "fk", 'n_sents', 
-                  "n_ents", "n_uppers", "platform_id",'amplifier',
-                  'analneg', 'attribadj', 'auxdo', 'bemv',
-                  'bracket', 'caps', 'cconj', 'cntrstconj',
-                  'colon', 'comma', 'defart', 'detquan',
-                  'exclam', 'fstpp', 'fulstop', 'gerund',
-                  'havemv', 'imperative', 'indefart', 
-                  'infinitive', 'it', 'mdnec', 
-                  'mdposs', 'mdpred', 'multiwvb',
-                  'nomin', 'numdet', 'numnoun', 'objpro',
-                  'otheradv', 'othrintj', 'othrnoun',
-                  'othrverb', 'passive', 'past', 'perceptvb',
-                  'perfect', 'posesprpn', 'possdet', 'predadj', 
-                  'prep', 'procontract', 'progressive', 
-                  'proquan', 'provdo', 'prpn', 'prvv', 'pubv', 
-                  'ques', 'relclausesubgap', 'sinflect', 
-                  'sndpp', 'stancevb', 'subjpro', 'superlative', 
-                  'thrdpp', 'timeadv', 'whw', 'initialmention']
-        
+        self.feature_fields = ["n_hashtags", "n_mentions", "avg_syllables",
+                               "avg_word_length", "fk", 'n_sents',
+                               "n_ents", "n_uppers", "platform_id",'amplifier',
+                               'analneg', 'attribadj', 'auxdo', 'bemv',
+                               'bracket', 'caps', 'cconj', 'cntrstconj',
+                               'colon', 'comma', 'defart', 'detquan',
+                               'exclam', 'fstpp', 'fulstop', 'gerund',
+                               'havemv', 'imperative', 'indefart',
+                               'infinitive', 'it', 'mdnec',
+                               'mdposs', 'mdpred', 'multiwvb',
+                               'nomin', 'numdet', 'numnoun', 'objpro',
+                               'otheradv', 'othrintj', 'othrnoun',
+                               'othrverb', 'passive', 'past', 'perceptvb',
+                               'perfect', 'posesprpn', 'possdet', 'predadj',
+                               'prep', 'procontract', 'progressive',
+                               'proquan', 'provdo', 'prpn', 'prvv', 'pubv',
+                               'ques', 'relclausesubgap', 'sinflect',
+                               'sndpp', 'stancevb', 'subjpro', 'superlative',
+                               'thrdpp', 'timeadv', 'whw', 'initialmention']
+
         self._mentions, self._hashtags = [], []
         self._length, self._n_words, self._n_sents = 0, 0, 0
         self._n_syllables, self._word_length_total = 0, 0
@@ -377,7 +370,12 @@ class Document(object):
         self._local_date, self._local_time = None, None
         self._utc_date = None
         self._id = None
-        
+
+    @property
+    def feature_dict(self):
+        return {self.feature_fields[f]: self._feature_array[f]
+                for f in range(len(self.feature_fields))}
+
     @property
     def ID(self):
         return self._id
@@ -457,7 +455,6 @@ class Document(object):
     def set_tokens_merged(self, x):
         self._tokens_merged_ents = x
     
-    
     def get_tokens_merged(self, keep_stops=False, lowercase=False):
         return [(t if lowercase is False else t.lower()) 
                 for t in self._tokens_merged_ents 
@@ -465,7 +462,7 @@ class Document(object):
     
     def get_tokens(self, merge_ents=True, keep_stops=False, lowercase=False):
         if merge_ents:
-            return self.get_tokens_merged_ents(keep_stops, lowercase)
+            return self.get_tokens_merged(keep_stops, lowercase)
         else:
             return [(t if lowercase is False else t.lower()) 
                     for t in self._tokens
@@ -524,11 +521,8 @@ class Document(object):
         fb = (self.n_syllables/self.word_count)
         calc = 206.835 - (1.015*fa) - (84.6*fb)
         return calc
-    
-    
-    
-    @staticmethod
-    def source_text2id(platform):
+
+    def source_text2id(self, platform):
         try:
             platform_id = self._platform_map[platform]
         except KeyError as errmsg:
@@ -578,31 +572,31 @@ class Document(object):
     @feature_array.setter
     def feature_array(self, x):
         self._feature_array = x
-    
+
     @property
     def local_date(self):
         return self._local_date
-    
+
     @local_date.setter
     def local_date(self, x):
         self._local_date = x
-      
+
     @property
     def local_time(self):
         return self._local_time
-    
+
     @local_time.setter
     def local_time(self, x):
         self._local_time = x
-    
+
     @property
     def utc_date(self):
         return self._utc_date
-    
+
     @utc_date.setter
     def utc_date(self, x):
         self._utc_date = x
-        
+
 
 class Preprocessor(object):
     
@@ -658,7 +652,7 @@ class Preprocessor(object):
         nlp_x = Preprocessor.update_nlp(self._nlp)
         doc_sents_raw = []
         for didx in tqdm(range(len(data))):
-            d = data[didx]['text']
+            d = data[didx].pop('text', "")
             clean_str = utils.clean(d)
 
             if clean_str is not None and clean_str.strip() != "":
@@ -670,7 +664,7 @@ class Preprocessor(object):
                     print(err, clean_str)
                     pass
                 else:
-                    
+
                     tkns_merged, tkns_merged_all = [], []
                     for t in doc_1:
                         tt = utils.clean2(t.text, puncts=self._puncts)
@@ -700,7 +694,7 @@ class Preprocessor(object):
                     
                     wc = data[didx].pop("word_count", 0)
                     doc.word_count = (len(doc.get_tokens(
-                        merge_ents=False, keep_stops=True)) 
+                        merge_ents=False, keep_stops=True))
                                       if wc == 0 else float(wc))
                     if doc.length == 0:
                         pass
@@ -709,7 +703,7 @@ class Preprocessor(object):
                         avg_word_length = doc.doc_chars/doc.word_count
                         
                         doc.cg_features = [int(x) for x in 
-                                           data[didx]['text_feats'].values()]
+                                           data[didx].pop('text_feats').values()]
 
                         doc_arr = [len(doc.hashtags), 
                                    len(doc.mentions),
@@ -720,12 +714,12 @@ class Preprocessor(object):
 
                         if len(doc_arr) == 69:
                             doc.feature_array = doc_arr
-                            doc.local_date = data[didx]['local_date']
-                            doc.local_time = data[didx]['local_time']
-                            doc.utc_date = data[didx]['utc_date']
+                            doc.local_date = data[didx].pop('local_date')
+                            doc.local_time = data[didx].pop('local_time')
+                            doc.utc_date = data[didx].pop('utc_date')
                             doc.ID = didx
                             self._docs.append(doc)
                             
                         else:
                             print("Length Error: ")
-                            print(f"{didx}) {data[didx]['text']}")
+                            print(f"{didx}) {clean_str}")

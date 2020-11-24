@@ -1,6 +1,7 @@
 import csv
 import os
 
+
 def load_full(t):
     if t == 'full':
         DATA_FILE = "../data/tweets/trump.full"
@@ -17,6 +18,7 @@ def load_full(t):
     next(data)
     return data
 
+
 def write_mini(dat, n=100, rtn=False):
     MINI_FILE = '../data/tweets/trump.mini'
     ministream = open(MINI_FILE, mode='w')
@@ -26,9 +28,11 @@ def write_mini(dat, n=100, rtn=False):
                                        "mentions","hashtags","geo"])
     i, data = 0, []
     while i <= n:
-        d.append(next(dat))
+        data.append(next(dat))
         i+=1
     writr.writerows(data)
     return data
 
-
+def make_tokens_list(series):
+    tokens_str = ",".join(list(series.values))
+    return tokens_str.split(",")

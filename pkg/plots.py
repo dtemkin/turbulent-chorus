@@ -1,5 +1,6 @@
 import seaborn as sns
 import matplotlib.pyplot as plt
+from tabulate import tabulate
 from collections import Counter
 
 def make_distplots(df, labs):
