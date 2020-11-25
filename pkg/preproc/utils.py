@@ -11,6 +11,7 @@ def clean(string):
 
 def clean2(string, puncts):
     string = re.sub("\.(?=.*\.)", "", string)
+    string = re.sub("\.", "", string)
     string.strip()
     string = string.replace("’ve", " have").replace("’s", "")
     string = string.replace("’ll", ' will').replace("n’t", " not")

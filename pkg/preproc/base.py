@@ -459,7 +459,7 @@ class Document(object):
     def get_tokens_merged(self, keep_stops=False, lowercase=False):
         return [(t.strip() if lowercase is False else t.lower().strip())
                 for t in self._tokens_merged_ents
-                if len(t.strip()) > 2 and
+                if (len(t.strip()) >= 2 and t.strip().find(":") == -1) and
                 (keep_stops is False and self.is_stop(
                     t.lower().strip()) is False)]
 
@@ -469,7 +469,7 @@ class Document(object):
         else:
             return [(t.strip() if lowercase is False else t.lower().strip())
                     for t in self._tokens
-                    if len(t.strip()) > 2 and
+                    if (len(t.strip()) >= 2 and t.strip().find(":") == -1) and
                     ((keep_stops is False and self.is_stop(t.lower().strip()) is False) or keep_stops is True)]
     
     @property
