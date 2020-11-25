@@ -133,7 +133,7 @@ class Data(object):
         s = re.sub(r'(C|P|E)\W*T', "", s)
         s = re.sub(r'\(\)', "", s)
         s = re.sub(" \/ ", "", s)
-        if s is not "" and s is not None:
+        if s != "" and s is not None:
             return s
         else:
             pass
@@ -361,6 +361,7 @@ class Document(object):
         self._stops = [s.strip() for s in
                        open(os.path.join(base_data, 'stopwords.en.basic'),
                                          mode='r').readlines()]
+
         self._sentences, self._tokens, self._tokens_merged_ents = [], [], []     
         self._platform_map = {}
         self._platform_id = None
@@ -456,17 +457,20 @@ class Document(object):
         self._tokens_merged_ents = x
     
     def get_tokens_merged(self, keep_stops=False, lowercase=False):
-        return [(t if lowercase is False else t.lower()) 
-                for t in self._tokens_merged_ents 
-                if self.is_stop(t) is keep_stops]
-    
+        return [(t.strip() if lowercase is False else t.lower().strip())
+                for t in self._tokens_merged_ents
+                if len(t.strip()) > 2 and
+                (keep_stops is False and self.is_stop(
+                    t.lower().strip()) is False)]
+
     def get_tokens(self, merge_ents=True, keep_stops=False, lowercase=False):
         if merge_ents:
             return self.get_tokens_merged(keep_stops, lowercase)
         else:
-            return [(t if lowercase is False else t.lower()) 
+            return [(t.strip() if lowercase is False else t.lower().strip())
                     for t in self._tokens
-                    if self.is_stop(t) is keep_stops]
+                    if len(t.strip()) > 2 and
+                    ((keep_stops is False and self.is_stop(t.lower().strip()) is False) or keep_stops is True)]
     
     @property
     def length(self):
@@ -545,7 +549,7 @@ class Document(object):
                     pass
                 else:
                     tx = utils.clean2(tx, puncts)
-                    if len(tx) > 0:
+                    if len(tx) > 2:
                         self._word_length_total += len(tx)
                         self._tokens.append(tx)
                         self._pos_tags.append(t.tag_)

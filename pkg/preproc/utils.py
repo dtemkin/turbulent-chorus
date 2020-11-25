@@ -11,6 +11,7 @@ def clean(string):
 
 def clean2(string, puncts):
     string = re.sub("\.(?=.*\.)", "", string)
+    string.strip()
     string = string.replace("’ve", " have").replace("’s", "")
     string = string.replace("’ll", ' will').replace("n’t", " not")
     string = string.replace("‘18", '2018').replace("w\/", "with")
@@ -20,8 +21,7 @@ def clean2(string, puncts):
     string = string.replace("u.s.", 'usa')
     string = string.replace("U.S.", 'usa')
     string = string.replace("US", 'usa')
-    string = string.replace("us.", 'us')
-    string = string.replace("🇺", "")
+    string = string.replace("usa.", 'usa')
     string = string.replace("n't", " not").replace("--","").replace("—","")
     string = string.strip()
     if len(string) > 0 and string not in puncts:
